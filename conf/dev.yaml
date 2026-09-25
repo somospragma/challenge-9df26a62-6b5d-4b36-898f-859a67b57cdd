@@ -1,0 +1,322 @@
+environment: development
+
+database:
+  source:
+    host: "localhost"
+    port: 5432
+    database: "datacorp_source"
+    username: "etl_user"
+    password_secret: "arn:aws:secretsmanager:us-east-1:123456789012:secret:db/source-password"
+    pool_size: 10
+    max_overflow: 20
+    pool_timeout: 30
+    connection_timeout: 60
+
+  warehouse:
+    host: "datacorp-warehouse.abc123.us-east-1.redshift.amazonaws.com"
+    port: 5439
+    database: "analytics_warehouse"
+    username: "warehouse_user"
+    password_secret: "arn:aws:secretsmanager:us-east-1:123456789012:secret:db/warehouse-password"
+    iam_role: "arn:aws:iam::123456789012:role/RedshiftLoadRole"
+    cluster_identifier: "datacorp-main-cluster"
+    region: "us-east-1"
+
+storage:
+  raw_zone:
+    bucket: "datacorp-dev-data-lake-raw"
+    prefix: "raw/"
+    format: "parquet"
+    partitioning: [" ingestion_date=YYYY-MM-DD", "source_system"]
+    compression: "snappy"
+
+  trusted_zone:
+    bucket: "datacorp-dev-data-lake-trusted"
+    prefix: "trusted/"
+    format: "parquet"
+    partitioning: ["year=YYYY", "month=MM", "day=DD", "domain"]
+    compression: "gzip"
+
+  curated_zone:
+    bucket: "datacorp-dev-data-lake-curated"
+    prefix: "curated/"
+    format: "parquet"
+    partitioning: ["year=YYYY", "month=MM", "domain", "process_status"]
+    compression: "zstd"
+
+s3:
+  region: "us-east-1"
+  endpoint_url: null
+  use_accelerate_endpoint: false
+  max_pool_connections: 50
+  timeout: 300
+
+airflow:
+  webserver_host: "localhost"
+  webserver_port: 8080
+  executor: "LocalExecutor"
+  parallelism: 16
+  dag_concurrency: 8
+  max_active_runs_per_dag: 3
+  load_examples: false
+  base_url: "http://localhost:8080"
+  
+  connections:
+    aws_default:
+      conn_type: "aws"
+      conn_id: "aws_default"
+      login: "AKIAIOSFODNN7EXAMPLE"
+      password_secret: "arn:aws:secretsmanager:us-east-1:123456789012:secret:aws/credentials"
+    
+    postgres_source:
+      conn_type: "postgres"
+      conn_id: "postgres_source"
+      host: "localhost"
+      schema: "datacorp_source"
+      login: "etl_user"
+      password_secret: "arn:aws:secretsmanager:us-east-1:123456789012:secret:db/source-password"
+      port: 5432
+    
+    redshift_warehouse:
+      conn_type: "redshift"
+      conn_id: "redshift_warehouse"
+      host: "datacorp-warehouse.abc123.us-east-1.redshift.amazonaws.com"
+      schema: "analytics_warehouse"
+      login: "warehouse_user"
+      password_secret: "arn:aws:secretsmanager:us-east-1:123456789012:secret:db/warehouse-password"
+      port: 5439
+
+data_quality:
+  enabled: true
+  
+  thresholds:
+    completeness:
+      critical: 99.0
+      warning: 95.0
+      block_on_failure: true
+    
+    uniqueness:
+      critical: 98.0
+      warning: 95.0
+      block_on_failure: false
+    
+    consistency:
+      critical: 98.0
+      warning: 95.0
+      block_on_failure: true
+    
+    timeliness:
+      critical: 95.0
+      warning: 90.0
+      block_on_failure: false
+
+  quarantine:
+    enabled: true
+    bucket: "datacorp-dev-data-lake-quarantine"
+    prefix: "quarantine/"
+    retention_days: 30
+    notification_topic: "arn:aws:sns:us-east-1:123456789012:data-quality-alerts"
+
+  rules:
+    - name: "customer_id_not_null"
+      table: "customers"
+      column: "customer_id"
+      rule_type: "completeness"
+      threshold: 99.5
+      enabled: true
+    
+    - name: "email_valid_format"
+      table: "customers"
+      column: "email"
+      rule_type: "consistency"
+      threshold: 98.0
+      pattern: "^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}$"
+      enabled: true
+    
+    - name: "transaction_amount_positive"
+      table: "transactions"
+      column: "amount"
+      rule_type: "consistency"
+      threshold: 99.0
+      min_value: 0
+      enabled: true
+    
+    - name: "order_date_not_future"
+      table: "orders"
+      column: "order_date"
+      rule_type: "timeliness"
+      threshold: 99.0
+      max_days_in_future: 0
+      enabled: true
+
+schema_evolution:
+  enabled: true
+  
+  catalog:
+    type: "glue"
+    database: "datacorp_dev_governance"
+    region: "us-east-1"
+
+  migration:
+    auto_apply: false
+    require_approval: true
+    backup_before_migration: true
+    backup_retention_days: 90
+
+  compatibility_checks:
+    block_on_breaking: true
+    warn_on_add_optional: false
+    warn_on_remove_optional: true
+
+lineage:
+  enabled: true
+  
+  tracker:
+    type: "openlineage"
+    backend: "s3"
+    bucket: "datacorp-dev-lineage"
+    prefix: "lineage/"
+    
+  capture:
+    extract_dependencies: true
+    transform_dependencies: true
+    load_dependencies: true
+    runtime_context: true
+
+governance:
+  framework:
+    name: "DAMA-TOGAF-CMMi"
+    version: "1.0.0"
+    
+  policies:
+    data_classification:
+      enabled: true
+      levels:
+        - name: "public"
+          description: "Data that can be freely shared"
+          color: "green"
+        - name: "internal"
+          description: "Data for internal use only"
+          color: "blue"
+        - name: "confidential"
+          description: "Sensitive business data"
+          color: "yellow"
+        - name: "restricted"
+          description: "Highly sensitive data requiring special handling"
+          color: "red"
+    
+    retention:
+      enabled: true
+      default_policy:
+        active_years: 7
+        archive_years: 10
+        deletion_requires_approval: true
+      
+      table_policies:
+        - table: "transactions"
+          active_years: 7
+          archive_years: 10
+        - table: "customer_pii"
+          active_years: 5
+          archive_years: 0
+         pii: true
+    
+    access_control:
+      enabled: true
+      default_role: "read"
+      require_approval_for_write: true
+      require_approval_for_delete: true
+
+  roles:
+    - name: "data_steward"
+      permissions: ["read", "write", "approve_quality_rules"]
+      description: "Manages data quality and metadata"
+    
+    - name: "data_owner"
+      permissions: ["read", "write", "delete", "manage_access", "manage_retention"]
+      description: "Owns business domain data"
+    
+    - name: "etl_developer"
+      permissions: ["read", "write"]
+      description: "Builds and maintains ETL pipelines"
+
+orchestration:
+  dag_defaults:
+    retries: 2
+    retry_delay_minutes: 5
+    execution_timeout_hours: 6
+    depends_on_past: false
+    wait_for_downstream: true
+    
+  scheduling:
+    default_cron: "0 2 * * *"
+    max_active_runs: 3
+    
+  notification:
+    on_success: false
+    on_failure: true
+    on_retry: false
+    channels:
+      email:
+        enabled: true
+        recipients: ["data-eng@datacorp.com"]
+      slack:
+        enabled: false
+        webhook_secret: "arn:aws:secretsmanager:us-east-1:123456789012:secret:slack/webhook"
+
+monitoring:
+  metrics:
+    enabled: true
+    export_to_cloudwatch: true
+    
+  alerts:
+    pipeline_failure:
+      enabled: true
+      threshold_minutes: 60
+      notification_topic: "arn:aws:sns:us-east-1:123456789012:data-pipeline-alerts"
+    
+    data_quality_failure:
+      enabled: true
+      threshold_count: 100
+      notification_topic: "arn:aws:sns:us-east-1:123456789012:data-quality-alerts"
+    
+    schema_drift:
+      enabled: true
+      notification_topic: "arn:aws:sns:us-east-1:123456789012:schema-alerts"
+
+logging:
+  level: "INFO"
+  format: "json"
+  output: "cloudwatch"
+  log_group: "/aws/datacorp/dev/airflow"
+  
+spark:
+  version: "3.5.0"
+  
+  config:
+    spark.sql.adaptive.enabled: true
+    spark.sql.adaptive.coalescePartitions.enabled: true
+    spark.sql.shuffle.partitions: 200
+    spark.dynamicAllocation.enabled: true
+    spark.dynamicAllocation.minExecutors: 1
+    spark.dynamicAllocation.maxExecutors: 10
+    spark.executor.memory: "4g"
+    spark.executor.cores: 2
+    spark.driver.memory: "2g"
+    
+  emr:
+    cluster_id: "j-XXXXXXXXXXXXX"
+    region: "us-east-1"
+    log_uri: "s3://datacorp-dev-emr-logs/"
+    
+pipeline_defaults:
+  batch_size: 10000
+  max_parallel_tasks: 8
+  checkpoint_enabled: true
+  checkpoint_interval: 100
+  
+  performance:
+    enable_broadcast: true
+    broadcast_threshold_mb: 10
+    enable_caching: true
+    cache_level: "MEMORY_AND_DISK"
